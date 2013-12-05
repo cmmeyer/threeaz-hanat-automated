@@ -1,0 +1,132 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Add bastion host to baseline VPC",
+  "Parameters": {
+    "VpcId": {
+      "Description": "VPC to create environment in",
+      "Type": "String",
+      "Default": "vpc-"
+    },
+    "AzLetters": {
+      "Description": "Comma-separated list",
+      "Type": "CommaDelimitedList",
+      "Default": "b"
+    },
+    "ProdPubMgmtSubnet": {
+      "Description": "Public management subnet",
+      "Type": "String",
+      "Default": "subnet-"
+    },
+    "KeyPairName": {
+      "Description": "Name of an existing Amazon EC2 key pair for ssh access",
+      "Type": "String",
+      "Default": "mykeypair"
+    },
+    "BastionAmiId": {
+      "Description": "AMI for this region",
+      "Type": "String",
+      "Default": "ami-"
+    },
+    "SrcIps": {
+      "Description": "Ip block to nat for ('a.b.c.d/e')",
+      "Type": "String",
+      "Default": "a.b.c.d/e"
+    },
+    "BastionInstanceSize": {
+      "Description": "Ec2 instance size to create",
+      "Type": "String",
+      "Default": "m1.large"
+    }
+  },
+  "Resources": {
+    "BastionSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Inbound Bastion Traffic",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": {
+              "Ref": "SrcIps"
+            }
+          }
+        ],
+        "VpcId": {
+          "Ref": "VpcId"
+        }
+      }
+    },
+    "BastionLaunchMgmt": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "ImageId": {
+          "Ref": "BastionAmiId"
+        },
+        "InstanceMonitoring": "FALSE",
+        "InstanceType": {
+          "Ref": "BastionInstanceSize"
+        },
+        "KeyName": {
+          "Ref": "KeyPairName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "BastionSG"
+          }
+        ],
+        "AssociatePublicIpAddress": "true"
+      }
+    },
+    "BastionASGMgmt": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AWS::Region"
+                },
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Ref": "AzLetters"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "BastionLaunchMgmt"
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "ProdPubMgmtSubnet"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "ha-bastion-mgmt",
+            "PropagateAtLaunch": "True"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "AutoScalingGroup": {
+      "Value": {
+        "Ref": "BastionASGMgmt"
+      }
+    }
+  }
+}

@@ -1,0 +1,1648 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Three AZ Prod Environment with Private subnets, HA NATs, and HA Bastion",
+  "Parameters": {
+    "VpcId": {
+      "Description": "VPC to create environment in",
+      "Type": "String",
+      "Default": "vpc-"
+    },
+    "AzLetters": {
+      "Description": "Comma-separated list",
+      "Type": "CommaDelimitedList",
+      "Default": "b,c"
+    },
+    "ProdPubSubnetIpBlocks": {
+      "Description": "CSV of Cidrs for Public Subnets",
+      "Type": "CommaDelimitedList",
+      "Default": "10.167.70.0/24, 10.167.80.0/24"
+    },
+    "ProdPrivSubnetIpBlocks": {
+      "Description": "CSV of Cidrs for Private Subnets",
+      "Type": "CommaDelimitedList",
+      "Default": "10.167.70.0/24, 10.167.80.0/24"
+    },
+    "ProdPubMgmtSubnetIpBlock": {
+      "Description": "CSV of Cidr for Management Subnet",
+      "Type": "String",
+      "Default": "10.167.70.0/24"
+    },
+    "ProdPrivMgmtSubnetIpBlock": {
+      "Description": "CSV of Cidr for Management Subnet",
+      "Type": "String",
+      "Default": "10.167.70.0/24"
+    },
+    "ProdPubSubnetRouteTable": {
+      "Description": "Route table these subnets will use",
+      "Type": "String",
+      "Default": "rtb-"
+    },
+    "KeyPairName": {
+      "Description": "Name of an existing Amazon EC2 key pair for ssh access",
+      "Type": "String",
+      "Default": "mykeypair"
+    },
+    "NatAmiId": {
+      "Description": "Boto-enabled NAT AMI for this region",
+      "Type": "String",
+      "Default": "ami-"
+    },
+    "NatSrcIps": {
+      "Description": "Ip block to nat for ('a.b.c.d/e')",
+      "Type": "String",
+      "Default": "a.b.c.d/e"
+    },
+    "NatInstanceSize": {
+      "Description": "Ec2 instance size to create",
+      "Type": "String",
+      "Default": "m1.large"
+    },
+        "BastionAmiId": {
+      "Description": "AMI for this region",
+      "Type": "String",
+      "Default": "ami-"
+    },
+    "BastioSrcIps": {
+      "Description": "Ip block to nat for ('a.b.c.d/e')",
+      "Type": "String",
+      "Default": "a.b.c.d/e"
+    },
+    "BastionInstanceSize": {
+      "Description": "Ec2 instance size to create",
+      "Type": "String",
+      "Default": "m1.large"
+    }
+  },
+  "Resources": {
+    "AttachElasticIpRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "AttachElasticIp",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "ec2:AssociateAddress",
+                  "Effect": "Allow",
+                  "Resource": "*"
+                },
+                {
+                  "Action": [
+                    "ec2:AttachNetworkInterface"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    "*"
+                  ]
+                },
+                {
+                  "Action": [
+                    "ec2:DescribeRegions"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    "*"
+                  ]
+                },
+                {
+                  "Action": [
+                    "ec2:DescribeVpcs"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AttachElasticIpInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "AttachElasticIpRole"
+          }
+        ]
+      }
+    },
+    "NatEipOne": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "NatEipTwo": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "NatEipThree": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "NatEipMgmt": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "AssociateNatEipOne": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatEipOne",
+            "AllocationId"
+          ]
+        },
+        "NetworkInterfaceId": {
+          "Ref": "NatEniOne"
+        }
+      }
+    },
+    "AssociateNatEipTwo": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatEipTwo",
+            "AllocationId"
+          ]
+        },
+        "NetworkInterfaceId": {
+          "Ref": "NatEniTwo"
+        }
+      }
+    },
+    "AssociateNatEipThree": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatEipThree",
+            "AllocationId"
+          ]
+        },
+        "NetworkInterfaceId": {
+          "Ref": "NatEniThree"
+        }
+      }
+    },
+    "AssociateNatEipMgmt": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatEipMgmt",
+            "AllocationId"
+          ]
+        },
+        "NetworkInterfaceId": {
+          "Ref": "NatEniMgmt"
+        }
+      }
+    },
+    "NatEniOne": {
+      "Type": "AWS::EC2::NetworkInterface",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubSubnet1"
+        },
+        "Description": "Nat1 Internal Interface",
+        "GroupSet": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "SourceDestCheck": "false",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "HaNat"
+          }
+        ]
+      }
+    },
+    "NatEniTwo": {
+      "Type": "AWS::EC2::NetworkInterface",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubSubnet2"
+        },
+        "Description": "Nat2 Internal Interface",
+        "GroupSet": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "SourceDestCheck": "false",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "HaNat"
+          }
+        ]
+      }
+    },
+    "NatEniThree": {
+      "Type": "AWS::EC2::NetworkInterface",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubSubnet3"
+        },
+        "Description": "Nat3 Internal Interface",
+        "GroupSet": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "SourceDestCheck": "false",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "HaNat"
+          }
+        ]
+      }
+    },
+    "NatEniMgmt": {
+      "Type": "AWS::EC2::NetworkInterface",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubMgmtSubnet"
+        },
+        "Description": "Mgmt Nat Internal Interface",
+        "GroupSet": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "SourceDestCheck": "false",
+        "Tags": [
+          {
+            "Key": "Network",
+            "Value": "HaNat"
+          }
+        ]
+      }
+    },
+    "ProdPubSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            0,
+            {
+              "Ref": "ProdPubSubnetIpBlocks"
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPubSubnet2": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            1,
+            {
+              "Ref": "ProdPubSubnetIpBlocks"
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPubSubnet3": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            2,
+            {
+              "Ref": "ProdPubSubnetIpBlocks"
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPrivSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  0,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            0,
+            {
+              "Ref": "ProdPrivSubnetIpBlocks"
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPrivSubnet2": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  1,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            1,
+            {
+              "Ref": "ProdPrivSubnetIpBlocks"
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPrivSubnet3": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            2,
+            {
+              "Ref": "ProdPrivSubnetIpBlocks"
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPrivMgmtSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Ref": "ProdPrivMgmtSubnetIpBlock"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "ProdPubMgmtSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Ref": "AzLetters"
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "CidrBlock": {
+          "Ref": "ProdPubMgmtSubnetIpBlock"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Prod"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTableOne": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private1"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTableTwo": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private2"
+          }
+        ]
+      }
+    },
+    "PrivateRouteTableThree": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Private3"
+          }
+        ]
+      }
+    },
+    "PubManagementRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Management"
+          }
+        ]
+      }
+    },
+    "PrivManagementRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          {
+            "Key": "Network",
+            "Value": "Management"
+          }
+        ]
+      }
+    },
+    "NatRoute1": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTableOne"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NetworkInterfaceId": {
+          "Ref": "NatEniOne"
+        }
+      }
+    },
+    "NatRoute2": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTableTwo"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NetworkInterfaceId": {
+          "Ref": "NatEniTwo"
+        }
+      }
+    },
+    "NatRoute3": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRouteTableThree"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NetworkInterfaceId": {
+          "Ref": "NatEniThree"
+        }
+      }
+    },
+    "PrivMgmtNatRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivManagementRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NetworkInterfaceId": {
+          "Ref": "NatEniMgmt"
+        }
+      }
+    },
+    "PrivateSubnetRouteTableAssociationA": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPrivSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTableOne"
+        }
+      }
+    },
+    "PrivateSubnetRouteTableAssociationB": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPrivSubnet2"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTableTwo"
+        }
+      }
+    },
+    "PrivateSubnetRouteTableAssociationC": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPrivSubnet3"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRouteTableThree"
+        }
+      }
+    },
+    "ProdPubSubnet1RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "ProdPubSubnetRouteTable"
+        }
+      }
+    },
+    "ProdPubSubnet2RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubSubnet2"
+        },
+        "RouteTableId": {
+          "Ref": "ProdPubSubnetRouteTable"
+        }
+      }
+    },
+    "ProdPubSubnet3RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubSubnet3"
+        },
+        "RouteTableId": {
+          "Ref": "ProdPubSubnetRouteTable"
+        }
+      }
+    },
+    "PrivManagementSubnetRouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPrivMgmtSubnet"
+        },
+        "RouteTableId": {
+          "Ref": "PrivManagementRouteTable"
+        }
+      }
+    },
+    "PubManagementSubnetRouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "ProdPubMgmtSubnet"
+        },
+        "RouteTableId": {
+          "Ref": "ProdPubSubnetRouteTable"
+        }
+      }
+    },
+    "NatSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Inbound Nat Traffic",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "-1",
+            "FromPort": "-1",
+            "ToPort": "-1",
+            "CidrIp": {
+              "Ref": "NatSrcIps"
+            }
+          }
+        ],
+        "VpcId": {
+          "Ref": "VpcId"
+        }
+      }
+    },
+    "NatLaunch1": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "IamInstanceProfile": {
+          "Ref": "AttachElasticIpInstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "NatAmiId"
+        },
+        "InstanceMonitoring": "FALSE",
+        "InstanceType": {
+          "Ref": "NatInstanceSize"
+        },
+        "KeyName": {
+          "Ref": "KeyPairName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "AssociatePublicIpAddress": "true",
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/usr/bin/python",
+                "\n",
+                "import boto",
+                "\n",
+                "import subprocess",
+                "\n",
+                "import logging",
+                "\n",
+                "from boto.utils import get_instance_metadata",
+                "\n",
+                "logging.basicConfig(filename='/root/launch.log',level=logging.INFO)",
+                "\n",
+                "logging.info('Getting metadata')",
+                "\n",
+                "m = get_instance_metadata()",
+                "\n",
+                "logging.info('Setting Region and ENI')",
+                "\n",
+                "region = '",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "'",
+                "\n",
+                "eni = '",
+                {
+                  "Ref": "NatEniOne"
+                },
+                "'",
+                "\n",
+                "logging.info('Connecting to EC2 over proxy')",
+                "\n",
+                "ec2 = boto.connect_ec2()",
+                "\n",
+                "ec2 = boto.ec2.connect_to_region(region)",
+                "\n",
+                "logging.info('Attaching the ENI')",
+                "\n",
+                "ec2.attach_network_interface(eni, m['instance-id'], 1)",
+                "\n",
+                "logging.info('Writing ifcfg-eth1 under /etc/sysconfig/network-scripts')",
+                "\n",
+                "f = open('/etc/sysconfig/network-scripts/ifcfg-eth1', 'w')",
+                "\n",
+                "f.write('",
+                "DEVICE=eth1\\n",
+                "BOOTPROTO=dhcp\\n",
+                "ONBOOT=yes\\n",
+                "TYPE=Ethernet\\n",
+                "USERCTL=yes\\n",
+                "PEERDNS=yes\\n",
+                "IPV6INIT=no\\n",
+                "')",
+                "\n",
+                "f.close()",
+                "\n",
+                "logging.info('Restarting the network')",
+                "\n",
+                "cmd = ['/etc/init.d/network', 'restart']",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n",
+                "cmd = '/sbin/iptables -t nat -A POSTROUTING -o eth1 -s ",
+                {
+                  "Ref": "NatSrcIps"
+                },
+                " -j MASQUERADE'.split()",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "NatLaunch2": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "IamInstanceProfile": {
+          "Ref": "AttachElasticIpInstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "NatAmiId"
+        },
+        "InstanceMonitoring": "FALSE",
+        "InstanceType": {
+          "Ref": "NatInstanceSize"
+        },
+        "KeyName": {
+          "Ref": "KeyPairName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "AssociatePublicIpAddress": "true",
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/usr/bin/python",
+                "\n",
+                "import boto",
+                "\n",
+                "import subprocess",
+                "\n",
+                "import logging",
+                "\n",
+                "from boto.utils import get_instance_metadata",
+                "\n",
+                "logging.basicConfig(filename='/root/launch.log',level=logging.INFO)",
+                "\n",
+                "logging.info('Getting metadata')",
+                "\n",
+                "m = get_instance_metadata()",
+                "\n",
+                "logging.info('Setting Region and ENI')",
+                "\n",
+                "region = '",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "'",
+                "\n",
+                "eni = '",
+                {
+                  "Ref": "NatEniTwo"
+                },
+                "'",
+                "\n",
+                "logging.info('Connecting to EC2')",
+                "\n",
+                "ec2 = boto.connect_ec2()",
+                "\n",
+                "ec2 = boto.ec2.connect_to_region(region)",
+                "\n",
+                "logging.info('Attaching the ENI')",
+                "\n",
+                "ec2.attach_network_interface(eni, m['instance-id'], 1)",
+                "\n",
+                "logging.info('Writing ifcfg-eth1 under /etc/sysconfig/network-scripts')",
+                "\n",
+                "f = open('/etc/sysconfig/network-scripts/ifcfg-eth1', 'w')",
+                "\n",
+                "f.write('",
+                "DEVICE=eth1\\n",
+                "BOOTPROTO=dhcp\\n",
+                "ONBOOT=yes\\n",
+                "TYPE=Ethernet\\n",
+                "USERCTL=yes\\n",
+                "PEERDNS=yes\\n",
+                "IPV6INIT=no\\n",
+                "')",
+                "\n",
+                "f.close()",
+                "\n",
+                "logging.info('Restarting the network')",
+                "\n",
+                "cmd = ['/etc/init.d/network', 'restart']",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n",
+                "cmd = '/sbin/iptables -t nat -A POSTROUTING -o eth1 -s ",
+                {
+                  "Ref": "NatSrcIps"
+                },
+                " -j MASQUERADE'.split()",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "NatLaunch3": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "IamInstanceProfile": {
+          "Ref": "AttachElasticIpInstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "NatAmiId"
+        },
+        "InstanceMonitoring": "FALSE",
+        "InstanceType": {
+          "Ref": "NatInstanceSize"
+        },
+        "KeyName": {
+          "Ref": "KeyPairName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "AssociatePublicIpAddress": "true",
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/usr/bin/python",
+                "\n",
+                "import boto",
+                "\n",
+                "import subprocess",
+                "\n",
+                "import logging",
+                "\n",
+                "from boto.utils import get_instance_metadata",
+                "\n",
+                "logging.basicConfig(filename='/root/launch.log',level=logging.INFO)",
+                "\n",
+                "logging.info('Getting metadata')",
+                "\n",
+                "m = get_instance_metadata()",
+                "\n",
+                "logging.info('Setting Region and ENI')",
+                "\n",
+                "region = '",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "'",
+                "\n",
+                "eni = '",
+                {
+                  "Ref": "NatEniThree"
+                },
+                "'",
+                "\n",
+                "logging.info('Connecting to EC2 over proxy')",
+                "\n",
+                "ec2 = boto.connect_ec2()",
+                "\n",
+                "ec2 = boto.ec2.connect_to_region(region)",
+                "\n",
+                "logging.info('Attaching the ENI')",
+                "\n",
+                "ec2.attach_network_interface(eni, m['instance-id'], 1)",
+                "\n",
+                "logging.info('Writing ifcfg-eth1 under /etc/sysconfig/network-scripts')",
+                "\n",
+                "f = open('/etc/sysconfig/network-scripts/ifcfg-eth1', 'w')",
+                "\n",
+                "f.write('",
+                "DEVICE=eth1\\n",
+                "BOOTPROTO=dhcp\\n",
+                "ONBOOT=yes\\n",
+                "TYPE=Ethernet\\n",
+                "USERCTL=yes\\n",
+                "PEERDNS=yes\\n",
+                "IPV6INIT=no\\n",
+                "')",
+                "\n",
+                "f.close()",
+                "\n",
+                "logging.info('Restarting the network')",
+                "\n",
+                "cmd = ['/etc/init.d/network', 'restart']",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n",
+                "cmd = '/sbin/iptables -t nat -A POSTROUTING -o eth1 -s ",
+                {
+                  "Ref": "NatSrcIps"
+                },
+                " -j MASQUERADE'.split()",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "NatLaunchMgmt": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "IamInstanceProfile": {
+          "Ref": "AttachElasticIpInstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "NatAmiId"
+        },
+        "InstanceMonitoring": "FALSE",
+        "InstanceType": {
+          "Ref": "NatInstanceSize"
+        },
+        "KeyName": {
+          "Ref": "KeyPairName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "NatSG"
+          }
+        ],
+        "AssociatePublicIpAddress": "true",
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/usr/bin/python",
+                "\n",
+                "import boto",
+                "\n",
+                "import subprocess",
+                "\n",
+                "import logging",
+                "\n",
+                "from boto.utils import get_instance_metadata",
+                "\n",
+                "logging.basicConfig(filename='/root/launch.log',level=logging.INFO)",
+                "\n",
+                "logging.info('Getting metadata')",
+                "\n",
+                "m = get_instance_metadata()",
+                "\n",
+                "logging.info('Setting Region and ENI')",
+                "\n",
+                "region = '",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "'",
+                "\n",
+                "eni = '",
+                {
+                  "Ref": "NatEniMgmt"
+                },
+                "'",
+                "\n",
+                "logging.info('Connecting to EC2 over proxy')",
+                "\n",
+                "ec2 = boto.connect_ec2()",
+                "\n",
+                "ec2 = boto.ec2.connect_to_region(region)",
+                "\n",
+                "logging.info('Attaching the ENI')",
+                "\n",
+                "ec2.attach_network_interface(eni, m['instance-id'], 1)",
+                "\n",
+                "logging.info('Writing ifcfg-eth1 under /etc/sysconfig/network-scripts')",
+                "\n",
+                "f = open('/etc/sysconfig/network-scripts/ifcfg-eth1', 'w')",
+                "\n",
+                "f.write('",
+                "DEVICE=eth1\\n",
+                "BOOTPROTO=dhcp\\n",
+                "ONBOOT=yes\\n",
+                "TYPE=Ethernet\\n",
+                "USERCTL=yes\\n",
+                "PEERDNS=yes\\n",
+                "IPV6INIT=no\\n",
+                "')",
+                "\n",
+                "f.close()",
+                "\n",
+                "logging.info('Restarting the network')",
+                "\n",
+                "cmd = ['/etc/init.d/network', 'restart']",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n",
+                "cmd = '/sbin/iptables -t nat -A POSTROUTING -o eth1 -s ",
+                {
+                  "Ref": "NatSrcIps"
+                },
+                " -j MASQUERADE'.split()",
+                "\n",
+                "output = subprocess.call(cmd)",
+                "\n",
+                "logging.info(output)",
+                "\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "NatASG1": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AWS::Region"
+                },
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Ref": "AzLetters"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "NatLaunch1"
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "ProdPubSubnet1"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "ha-nat-1",
+            "PropagateAtLaunch": "True"
+          }
+        ]
+      }
+    },
+    "NatASG2": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AWS::Region"
+                },
+                {
+                  "Fn::Select": [
+                    1,
+                    {
+                      "Ref": "AzLetters"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "NatLaunch2"
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "ProdPubSubnet2"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "ha-nat-2",
+            "PropagateAtLaunch": "True"
+          }
+        ]
+      }
+    },
+    "NatASG3": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AWS::Region"
+                },
+                {
+                  "Fn::Select": [
+                    2,
+                    {
+                      "Ref": "AzLetters"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "NatLaunch3"
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "ProdPubSubnet3"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "ha-nat-3",
+            "PropagateAtLaunch": "True"
+          }
+        ]
+      }
+    },
+    "NatASGMgmt": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AWS::Region"
+                },
+                {
+                  "Fn::Select": [
+                    2,
+                    {
+                      "Ref": "AzLetters"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "NatLaunchMgmt"
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "ProdPubMgmtSubnet"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "ha-nat-mgmt",
+            "PropagateAtLaunch": "True"
+          }
+        ]
+      }
+    },
+        "BastionSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Inbound Bastion Traffic",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": {
+              "Ref": "BastionSrcIps"
+            }
+          }
+        ],
+        "VpcId": {
+          "Ref": "VpcId"
+        }
+      }
+    },
+    "BastionLaunchMgmt": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "ImageId": {
+          "Ref": "BastionAmiId"
+        },
+        "InstanceMonitoring": "FALSE",
+        "InstanceType": {
+          "Ref": "BastionInstanceSize"
+        },
+        "KeyName": {
+          "Ref": "KeyPairName"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "BastionSG"
+          }
+        ],
+        "AssociatePublicIpAddress": "true"
+      }
+    },
+    "BastionASGMgmt": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AWS::Region"
+                },
+                {
+                  "Fn::Select": [
+                    0,
+                    {
+                      "Ref": "AzLetters"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "BastionLaunchMgmt"
+        },
+        "MaxSize": "1",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "ProdPubMgmtSubnet"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "ha-bastion-mgmt",
+            "PropagateAtLaunch": "True"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ProdPubSubnet1": {
+      "Value": {
+        "Ref": "ProdPubSubnet1"
+      }
+    },
+    "ProdPubSubnet2": {
+      "Value": {
+        "Ref": "ProdPubSubnet2"
+      }
+    },
+    "ProdPubSubnet3": {
+      "Value": {
+        "Ref": "ProdPubSubnet3"
+      }
+    },
+    "ProdPrivSubnet1": {
+      "Value": {
+        "Ref": "ProdPrivSubnet1"
+      }
+    },
+    "ProdPrivSubnet2": {
+      "Value": {
+        "Ref": "ProdPrivSubnet2"
+      }
+    },
+    "ProdPrivSubnet3": {
+      "Value": {
+        "Ref": "ProdPrivSubnet3"
+      }
+    },
+    "ProdPubMgmtSubnet": {
+      "Value": {
+        "Ref": "ProdPubMgmtSubnet"
+      }
+    },
+    "ProdPrivMgmtSubnet": {
+      "Value": {
+        "Ref": "ProdPrivMgmtSubnet"
+      }
+    }
+  }
+}
