@@ -57,12 +57,12 @@
       "Type": "String",
       "Default": "m1.large"
     },
-        "BastionAmiId": {
+    "BastionAmiId": {
       "Description": "AMI for this region",
       "Type": "String",
       "Default": "ami-"
     },
-    "BastioSrcIps": {
+    "BastionSrcIps": {
       "Description": "Ip block to nat for ('a.b.c.d/e')",
       "Type": "String",
       "Default": "a.b.c.d/e"
@@ -1520,7 +1520,7 @@
         ]
       }
     },
-        "BastionSG": {
+    "BastionSG": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
         "GroupDescription": "Inbound Bastion Traffic",
@@ -1573,7 +1573,7 @@
                 },
                 {
                   "Fn::Select": [
-                    0,
+                    2,
                     {
                       "Ref": "AzLetters"
                     }
